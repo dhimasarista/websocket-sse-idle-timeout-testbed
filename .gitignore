@@ -1,0 +1,16 @@
+node_modules/
+
+logs/
+temp/
+captures/
+
+*.pcap
+*.pcapng
+hasil_mentah.csv
+
+.env
+.env.*
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
