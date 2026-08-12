@@ -1,0 +1,33 @@
+server {
+    listen 8080;
+    server_name _;
+
+    access_log /var/log/nginx/access.log;
+
+    location /health {
+        proxy_pass http://server:3000;
+    }
+
+    location /probe {
+        proxy_pass http://server:3000;
+        proxy_read_timeout ${IDLE_TIMEOUT}s;
+    }
+
+    location /ws {
+        proxy_pass http://server:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout ${IDLE_TIMEOUT}s;
+    }
+
+    location /events {
+        proxy_pass http://server:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_read_timeout ${IDLE_TIMEOUT}s;
+        proxy_buffering off;
+        proxy_cache off;
+        add_header X-Accel-Buffering no;
+    }
+}

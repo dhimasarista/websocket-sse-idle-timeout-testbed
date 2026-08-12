@@ -22,11 +22,21 @@ const timeout = Number(getArg("timeout", "15"));
 const heartbeat = Number(getArg("heartbeat", process.env.HEARTBEAT_INTERVAL || "10"));
 const repetition = Number(getArg("rep", "1"));
 const baseUrl = getArg("base-url", "http://127.0.0.1:8080");
+const runId = getArg("run-id", `${impl}_${timeout}s_hb${heartbeat}s_rep${repetition}`);
+
+if (![idle, timeout, heartbeat, repetition].every(Number.isFinite) || idle < 0 || timeout <= 0 || heartbeat <= 0 || repetition <= 0) {
+  throw new Error("idle, timeout, heartbeat, and rep must be valid positive numbers");
+}
 
 function logEvent(event) {
   fs.appendFileSync(
     LOG,
     JSON.stringify({
+      run_id: runId,
+      idle_seconds: idle,
+      idle_timeout_value: timeout,
+      heartbeat_interval: heartbeat,
+      repetition,
       ...event,
       client_timestamp: Date.now(),
     }) + "\n"
@@ -44,6 +54,7 @@ function scenarioPayload() {
     idle_timeout_value: timeout,
     heartbeat_interval: heartbeat,
     repetition,
+    run_id: runId,
     probe: true,
     client_sent_timestamp: Date.now(),
   };
@@ -54,11 +65,21 @@ async function testWebSocket() {
 
   await new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
-    const failTimer = setTimeout(() => reject(new Error("WebSocket test timed out")), (idle + 20) * 1000);
+    let opened = false;
+    let settled = false;
+    const failTimer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        ws.terminate();
+        reject(new Error("WebSocket test timed out"));
+      }
+    }, (idle + 20) * 1000);
 
     ws.on("open", async () => {
+      opened = true;
       logEvent({ event_type: "connect", implementation_type: "websocket" });
       await sleep(idle * 1000);
+      if (settled || ws.readyState !== WebSocket.OPEN) return;
       const payload = scenarioPayload();
       logEvent({ event_type: "probe_send", implementation_type: "websocket", message_id: payload.message_id });
       ws.send(JSON.stringify(payload));
@@ -70,8 +91,11 @@ async function testWebSocket() {
         event_type: "probe_ack",
         implementation_type: "websocket",
         message_id: parsed.message_id,
-        latency_ms: Date.now() - parsed.received_timestamp,
+        latency_ms: Date.now() - parsed.client_sent_timestamp,
+        server_received_timestamp: parsed.server_received_timestamp,
       });
+      logEvent({ event_type: "scenario_result", implementation_type: "websocket", connection_survived_idle: true });
+      settled = true;
       clearTimeout(failTimer);
       ws.close();
       resolve();
@@ -79,12 +103,21 @@ async function testWebSocket() {
 
     ws.on("close", (code) => {
       logEvent({ event_type: "close", implementation_type: "websocket", close_code: code });
+      if (!settled && opened) {
+        settled = true;
+        clearTimeout(failTimer);
+        logEvent({ event_type: "scenario_result", implementation_type: "websocket", connection_survived_idle: false });
+        resolve();
+      }
     });
 
     ws.on("error", (err) => {
       logEvent({ event_type: "error", implementation_type: "websocket", detail: err.message });
-      clearTimeout(failTimer);
-      reject(err);
+      if (!opened) {
+        settled = true;
+        clearTimeout(failTimer);
+        reject(err);
+      }
     });
   });
 }
@@ -93,10 +126,19 @@ async function testSse() {
   const eventSource = new EventSource(`${baseUrl}/events`);
 
   await new Promise((resolve, reject) => {
-    const failTimer = setTimeout(() => reject(new Error("SSE test timed out")), (idle + 20) * 1000);
+    const failTimer = setTimeout(() => {
+      eventSource.close();
+      reject(new Error("SSE test timed out"));
+    }, (idle + 20) * 1000);
+    let openCount = 0;
+    let errorCount = 0;
+    let probeScheduled = false;
 
     eventSource.onopen = async () => {
+      openCount += 1;
       logEvent({ event_type: "connect", implementation_type: "sse" });
+      if (probeScheduled) return;
+      probeScheduled = true;
       await sleep(idle * 1000);
       const payload = scenarioPayload();
       logEvent({ event_type: "probe_send", implementation_type: "sse", message_id: payload.message_id });
@@ -112,7 +154,15 @@ async function testSse() {
             event_type: "probe_ack",
             implementation_type: "sse",
             message_id: body.message_id,
-            latency_ms: Date.now() - body.received_timestamp,
+            latency_ms: Date.now() - body.client_sent_timestamp,
+            server_received_timestamp: body.server_received_timestamp,
+          });
+          logEvent({
+            event_type: "scenario_result",
+            implementation_type: "sse",
+            connection_survived_idle: errorCount === 0 && openCount === 1,
+            reconnect_count: Math.max(0, openCount - 1),
+            error_count: errorCount,
           });
           clearTimeout(failTimer);
           eventSource.close();
@@ -130,6 +180,7 @@ async function testSse() {
     });
 
     eventSource.onerror = (err) => {
+      errorCount += 1;
       logEvent({ event_type: "error", implementation_type: "sse", detail: String(err.message || err) });
     };
   });
@@ -146,9 +197,8 @@ async function testSse() {
     await testSse();
   }
 
-  console.log(`Completed ${impl} scenario: timeout=${timeout}s heartbeat=${heartbeat}s idle=${idle}s rep=${repetition}`);
+  console.log(`Completed ${runId}: idle=${idle}s`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

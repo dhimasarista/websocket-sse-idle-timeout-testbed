@@ -3,13 +3,20 @@ node_modules/
 logs/
 temp/
 captures/
+artifacts/
 
 *.pcap
 *.pcapng
 hasil_mentah.csv
+hasil_ringkas.csv
 
 .env
 .env.*
+!.env.example
+
+.DS_Store
+__pycache__/
+*.py[cod]
 
 npm-debug.log*
 yarn-debug.log*

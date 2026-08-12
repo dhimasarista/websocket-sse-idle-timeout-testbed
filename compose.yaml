@@ -1,0 +1,44 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: localhost/idle-timeout-node:latest
+    environment:
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-10}
+      LOG_DIR: /app/logs
+    volumes:
+      - ./logs:/app/logs:Z
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:3000/health"]
+      interval: 2s
+      timeout: 1s
+      retries: 15
+
+  middlebox:
+    build:
+      context: ./nginx
+      dockerfile: Containerfile
+    image: localhost/idle-timeout-middlebox:latest
+    environment:
+      IDLE_TIMEOUT: ${IDLE_TIMEOUT:-15}
+    cap_add:
+      - NET_RAW
+    volumes:
+      - ./captures:/captures:Z
+    ports:
+      - "8080:8080"
+    depends_on:
+      server:
+        condition: service_healthy
+
+  client:
+    image: localhost/idle-timeout-node:latest
+    profiles: ["manual"]
+    environment:
+      LOG_DIR: /app/logs
+    volumes:
+      - ./logs:/app/logs:Z
+    depends_on:
+      - middlebox
+    command: ["node", "client/run_test.js", "--base-url=http://middlebox:8080"]

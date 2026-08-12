@@ -10,6 +10,10 @@ const LOG = process.env.SERVER_LOG || path.join(LOG_DIR, "server.log");
 const PORT = Number(process.env.PORT || 3000);
 const HEARTBEAT_INTERVAL = Number(process.env.HEARTBEAT_INTERVAL || 10) * 1000;
 
+if (!Number.isFinite(HEARTBEAT_INTERVAL) || HEARTBEAT_INTERVAL <= 0) {
+  throw new Error("HEARTBEAT_INTERVAL must be a positive number of seconds");
+}
+
 fs.mkdirSync(LOG_DIR, { recursive: true });
 
 function logEvent(event) {
@@ -86,11 +90,16 @@ app.post("/probe", (req, res) => {
     repetition: req.body?.repetition,
   });
 
-  res.json({ ok: true, message_id: messageId, received_timestamp: Date.now() });
+  res.json({
+    ok: true,
+    message_id: messageId,
+    client_sent_timestamp: req.body?.client_sent_timestamp,
+    server_received_timestamp: Date.now(),
+  });
 });
 
-const server = app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Server listening on http://127.0.0.1:${PORT}`);
+const server = app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server listening on http://0.0.0.0:${PORT}`);
 });
 
 const wss = new WebSocketServer({ server, path: "/ws" });
@@ -137,7 +146,12 @@ wss.on("connection", (ws) => {
       repetition: payload.repetition,
     });
 
-    ws.send(JSON.stringify({ ok: true, message_id: messageId, received_timestamp: Date.now() }));
+    ws.send(JSON.stringify({
+      ok: true,
+      message_id: messageId,
+      client_sent_timestamp: payload.client_sent_timestamp,
+      server_received_timestamp: Date.now(),
+    }));
   });
 
   ws.on("close", (code) => {
@@ -153,3 +167,12 @@ wss.on("connection", (ws) => {
   });
 });
 
+function shutdown(signal) {
+  console.log(`Received ${signal}; shutting down`);
+  wss.clients.forEach((client) => client.close(1001, "server shutdown"));
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 5000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

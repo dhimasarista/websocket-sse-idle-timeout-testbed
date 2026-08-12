@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules
+logs
+captures
+temp
+hasil_mentah.csv
+hasil_ringkas.csv
+*.pcap
+*.pcapng
